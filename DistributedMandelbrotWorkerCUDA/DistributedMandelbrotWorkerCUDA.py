@@ -95,7 +95,7 @@ def process_workload(level: int,
 
     out = (out.astype(np.float64) * 256) / mrd;
 
-    out = out.astype(np.uint8);
+    out = np.ceil(out).astype(np.uint8);
 
     return out;
 

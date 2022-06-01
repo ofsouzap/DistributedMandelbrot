@@ -1,7 +1,6 @@
 import numpy as np;
 from matplotlib import pyplot as plt;
 from matplotlib import cm as colormap;
-from PIL import Image;
 import socket;
 from struct import pack, unpack;
 
