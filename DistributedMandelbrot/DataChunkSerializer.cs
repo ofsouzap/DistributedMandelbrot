@@ -56,8 +56,6 @@ namespace DistributedMandelbrot
             protected override void SerializeData(Stream stream, byte[] data)
             {
 
-                stream.Write(new byte[1] { GetCode() }, 0, 1);
-
                 uint runLength = 0; // If 0, run hasn't been started yet
                 byte runValue = 0;
 
@@ -126,7 +124,7 @@ namespace DistributedMandelbrot
 
                     // Check run length
 
-                    if (dataIndex + runLength >= dataChunkSize)
+                    if (dataIndex + runLength > dataChunkSize)
                         throw new Exception("Data exceeds chunk expected length");
 
                     if (runLength == 0)

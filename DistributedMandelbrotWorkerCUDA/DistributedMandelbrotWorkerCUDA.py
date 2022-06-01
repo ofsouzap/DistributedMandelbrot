@@ -4,6 +4,9 @@ from numba import cuda;
 from numba import vectorize;
 import numpy as np;
 
+MIN_AXIS = -2;
+MAX_AXIS = 2;
+
 REQUEST_CODE = 0x00;
 RESPONSE_CODE = 0x01;
 
@@ -68,17 +71,17 @@ def process_workload(level: int,
     index_real: int,
     index_imag: int) -> np.ndarray:
 
-    _range = 4 / level;
+    chunk_range = (MAX_AXIS - MIN_AXIS) / level;
 
-    start_r = -2 + (_range + index_real);
-    start_i = -2 + (_range + index_imag);
+    start_r = MIN_AXIS + (chunk_range * index_real);
+    start_i = MIN_AXIS + (chunk_range * index_imag);
 
     mrd = 1024;
     definition = 4096; # Chunk size
 
     r, i = gen_arrays(start_r = start_r,
         start_i = start_i,
-        _range = _range,
+        _range = chunk_range,
         definition = definition);
 
     r_device = cuda.to_device(r);
@@ -91,6 +94,8 @@ def process_workload(level: int,
     out = out_device.copy_to_host();
 
     out = (out.astype(np.float64) * 256) / mrd;
+
+    out = out.astype(np.uint8);
 
     return out;
 
@@ -173,7 +178,7 @@ def main():
 
     addr = input("Server Addr> ");
     port = int(input("Server Port> "));
-
+    
     while do_workload_single(addr, port):
         pass;
 

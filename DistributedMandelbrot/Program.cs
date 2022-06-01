@@ -12,26 +12,53 @@ namespace DistributedMandelbrot
             // Distributer
 
             IPEndPoint distributerEndpoint = new(IPAddress.Any, 59010);
-            Distributer distributer = new(distributerEndpoint, new uint[] { 4, 5, 6, 7, 8, 9, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20 }, s => Console.WriteLine("D Info: " + s), s => Console.WriteLine("D Error: " + s));
 
-            Task distributerTask = new(() => distributer.StartListeningSync());
+            Task distributerTask = CreateDistributerTask(distributerEndpoint, new uint[] { 4, 10 }, s => Console.WriteLine("D Info: " + s), s => Console.WriteLine("D Error: " + s));
 
             // Data Server
 
             IPEndPoint dataServerEndpoint = new(IPAddress.Any, 59011);
-            DataServer dataServer = new(dataServerEndpoint, s => Console.WriteLine("S Info: " + s), s => Console.WriteLine("S Error: " + s));
 
-            Task dataServerTask = new(() => dataServer.StartListeningSync());
+            Task dataServerTask = CreateDataServerTask(dataServerEndpoint, s => Console.WriteLine("S Info: " + s), s => Console.WriteLine("S Error: " + s));
 
             // Run tasks
 
             distributerTask.Start();
             dataServerTask.Start();
 
+            // Join tasks
+
             distributerTask.Wait();
             dataServerTask.Wait();
+            
+        }
+
+        private static Task CreateDistributerTask(IPEndPoint endpoint,
+            uint[] levels,
+            Distributer.LogCallback infoCallback,
+            Distributer.LogCallback errCallback)
+        {
+
+            Distributer distributer = new(endpoint, levels, infoCallback, errCallback);
+
+            Task task = new(() => distributer.StartListeningSync());
+
+            return task;
 
         }
-        
+
+        private static Task CreateDataServerTask(IPEndPoint endpoint,
+            DataServer.LogCallback infoCallback,
+            DataServer.LogCallback errCallback)
+        {
+
+            DataServer dataServer = new(endpoint, infoCallback, errCallback);
+
+            Task task = new(() => dataServer.StartListeningSync());
+
+            return task;
+
+        }
+
     }
 }
