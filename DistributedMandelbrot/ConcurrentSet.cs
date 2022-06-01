@@ -30,10 +30,25 @@ namespace DistributedMandelbrot
                 items.Remove(item);
         }
 
-        public void RemoveFirstWhere(Predicate<T> predicate)
+        public bool RemoveOneWhere(Predicate<T> predicate)
+        {
+
+            lock (itemLock)
+                foreach (T item in items)
+                    if (predicate.Invoke(item))
+                    {
+                        items.Remove(item);
+                        return true;
+                    }
+
+            return false;
+
+        }
+
+        public int RemoveAllWhere(Predicate<T> predicate)
         {
             lock (itemLock)
-                items.RemoveWhere(predicate);
+                return items.RemoveWhere(predicate);
         }
 
         public bool Contains(T item)

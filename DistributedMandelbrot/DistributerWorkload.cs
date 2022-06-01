@@ -95,7 +95,10 @@ namespace DistributedMandelbrot
             }
 
             public bool Matches(Workload workload, long currentTime)
-                => workload == this.workload && currentTime < timeoutTime;
+                => workload == this.workload && !CheckHasTimedOut(currentTime);
+
+            public bool CheckHasTimedOut(long currentTime)
+                => currentTime > timeoutTime;
 
         }
 

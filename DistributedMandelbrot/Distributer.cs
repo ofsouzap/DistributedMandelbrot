@@ -4,6 +4,7 @@ using System.Collections.Concurrent;
 using System.Net;
 using System.Net.Sockets;
 using System.Diagnostics;
+using System.Timers;
 
 namespace DistributedMandelbrot
 {
@@ -19,6 +20,8 @@ namespace DistributedMandelbrot
         /// How long in milliseconds a worker has from being sent their workload to completing it in milliseconds
         /// </summary>
         private const long distributedWorkloadTimeout = 1000 * 3600; // An hour
+
+        private const long distributedWorkloadCleanupDelay = 1000 * 60 * 5; // 5 minutes
 
         #region Message Codes
 
@@ -48,6 +51,8 @@ namespace DistributedMandelbrot
         private readonly Stopwatch stopwatch;
         private long StopwatchMilliseconds => stopwatch.ElapsedMilliseconds;
 
+        private System.Timers.Timer distributedWorkloadCleanupTimer;
+
         private bool listening;
         private readonly object listeningLock = new();
 
@@ -74,6 +79,13 @@ namespace DistributedMandelbrot
 
             stopwatch = new Stopwatch();
             stopwatch.Start();
+
+            // Create distributed workload cleanup timer
+
+            distributedWorkloadCleanupTimer = new System.Timers.Timer(distributedWorkloadCleanupDelay);
+            distributedWorkloadCleanupTimer.Elapsed += (Object? sender, ElapsedEventArgs e) => CleanupDistributedWorkloads();
+            distributedWorkloadCleanupTimer.Enabled = true;
+            distributedWorkloadCleanupTimer.Start();
 
             // Set logs
 
@@ -114,10 +126,22 @@ namespace DistributedMandelbrot
 
             stopwatch.Stop();
 
+            distributedWorkloadCleanupTimer.Stop();
+            distributedWorkloadCleanupTimer.Dispose();
+
             foreach (uint level in levels)
                 distributerHandledLevels.Remove(level);
 
             socket.Close();
+
+        }
+
+        private void CleanupDistributedWorkloads()
+        {
+
+            long currentTime = StopwatchMilliseconds;
+
+            distributedWorkloads.RemoveAllWhere(dw => dw.CheckHasTimedOut(currentTime));
 
         }
 
@@ -383,7 +407,7 @@ namespace DistributedMandelbrot
 
                 // Mark workload completed
 
-                distributedWorkloads.RemoveFirstWhere(dw => dw.Matches(workload, currentTime));
+                distributedWorkloads.RemoveOneWhere(dw => dw.Matches(workload, currentTime));
                 completedWorkloads.Add(workload);
 
                 InfoLog("Moved workload from distributed workloads to completed workloads");
