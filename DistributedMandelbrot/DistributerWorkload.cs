@@ -5,6 +5,7 @@ namespace DistributedMandelbrot
 {
     public partial class Distributer
     {
+
         public struct Workload
         {
 
@@ -80,5 +81,23 @@ namespace DistributedMandelbrot
             }
 
         }
+
+        public struct DistributedWorkload
+        {
+
+            public Workload workload;
+            public long timeoutTime;
+
+            public DistributedWorkload(Workload workload, long timeoutTime)
+            {
+                this.workload = workload;
+                this.timeoutTime = timeoutTime;
+            }
+
+            public bool Matches(Workload workload, long currentTime)
+                => workload == this.workload && currentTime < timeoutTime;
+
+        }
+
     }
 }

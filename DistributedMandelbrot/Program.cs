@@ -6,14 +6,22 @@ namespace DistributedMandelbrot
     public class Program
     {
 
+        private static bool _timeoutEnabled = true;
+        public static bool TimeoutEnabled
+        {
+            get => _timeoutEnabled;
+        }
+
         public static void Main()
         {
+
+            //TODO - use command-line arguments to customise launching instead of being hard-coded
 
             // Distributer
 
             IPEndPoint distributerEndpoint = new(IPAddress.Any, 59010);
 
-            Task distributerTask = CreateDistributerTask(distributerEndpoint, new uint[] { 4, 10 }, s => Console.WriteLine("D Info: " + s), s => Console.WriteLine("D Error: " + s));
+            Task distributerTask = CreateDistributerTask(distributerEndpoint, new uint[] { 4, 10, 20 }, s => Console.WriteLine("D Info: " + s), s => Console.WriteLine("D Error: " + s));
 
             // Data Server
 

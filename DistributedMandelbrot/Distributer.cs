@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Collections.Concurrent;
 using System.Net;
 using System.Net.Sockets;
+using System.Diagnostics;
 
 namespace DistributedMandelbrot
 {
@@ -12,6 +13,12 @@ namespace DistributedMandelbrot
         private readonly static ConcurrentSet<uint> distributerHandledLevels = new();
 
         private const int listenBacklog = 16;
+        private const int receiveTimeout = 100;
+
+        /// <summary>
+        /// How long in milliseconds a worker has from being sent their workload to completing it in milliseconds
+        /// </summary>
+        private const long distributedWorkloadTimeout = 1000 * 3600; // An hour
 
         #region Message Codes
 
@@ -38,6 +45,9 @@ namespace DistributedMandelbrot
 
         private readonly Socket socket;
 
+        private readonly Stopwatch stopwatch;
+        private long StopwatchMilliseconds => stopwatch.ElapsedMilliseconds;
+
         private bool listening;
         private readonly object listeningLock = new();
 
@@ -51,9 +61,7 @@ namespace DistributedMandelbrot
         private event LogCallback InfoLog;
         private event LogCallback ErrorLog;
 
-        //TODO - add timeout to distributed workloads so if a worker takes too long, the job can be reassigned
-
-        private readonly ConcurrentSet<Workload> distributedWorkloads;
+        private readonly ConcurrentSet<DistributedWorkload> distributedWorkloads;
         private readonly ConcurrentSet<Workload> completedWorkloads;
 
         public Distributer(IPEndPoint endpoint,
@@ -61,6 +69,11 @@ namespace DistributedMandelbrot
             LogCallback InfoLog,
             LogCallback ErrorLog)
         {
+
+            // Create stopwatch
+
+            stopwatch = new Stopwatch();
+            stopwatch.Start();
 
             // Set logs
 
@@ -81,8 +94,8 @@ namespace DistributedMandelbrot
 
             // Set up workload bags
 
-            distributedWorkloads = new ConcurrentSet<Workload>();
-            completedWorkloads = new ConcurrentSet<Workload>(GetRelevantCompletedWorkloads());
+            distributedWorkloads = new();
+            completedWorkloads = new(GetRelevantCompletedWorkloads());
 
             // Set up socket
 
@@ -98,8 +111,14 @@ namespace DistributedMandelbrot
 
         ~Distributer()
         {
+
+            stopwatch.Stop();
+
             foreach (uint level in levels)
                 distributerHandledLevels.Remove(level);
+
+            socket.Close();
+
         }
 
         /// <summary>
@@ -136,6 +155,14 @@ namespace DistributedMandelbrot
             }
         }
 
+        private static void ConfigureClientSocket(Socket socket)
+        {
+
+            if (Program.TimeoutEnabled)
+                socket.ReceiveTimeout = receiveTimeout;
+
+        }
+
         /// <summary>
         /// Synchronously starts the distributer listening and handling requests
         /// </summary>
@@ -166,48 +193,72 @@ namespace DistributedMandelbrot
 
                 InfoLog("Worker accepted");
 
-                // Determine connection purpose
+                // Configure client socket settings
 
-                byte[] buffer = new byte[1];
-                client.Receive(buffer, 1, SocketFlags.None);
+                ConfigureClientSocket(client);
 
-                InfoLog("Connection purpose recevied");
-
-                // Handle connection by purpose
-
-                switch (buffer[0])
+                try
                 {
 
-                    case workloadRequestCode:
-                        InfoLog("Handling workload request...");
-                        HandleWorkloadRequest(client);
-                        InfoLog("Workload request handled");
-                        break;
+                    // Determine connection purpose
 
-                    case workloadResponseCode:
-                        InfoLog("Handling workload response...");
-                        HandleWorkloadResponse(client);
-                        InfoLog("Handling workload response");
-                        break;
+                    byte[] buffer = new byte[1];
 
-                    default:
-                        ErrorLog("Unknown connection purpose recevied");
-                        break;
+                    client.Receive(buffer, 1, SocketFlags.None);
+
+                    InfoLog("Connection purpose recevied");
+
+                    // Handle connection by purpose
+
+                    switch (buffer[0])
+                    {
+
+                        case workloadRequestCode:
+                            InfoLog("Handling workload request...");
+                            HandleWorkloadRequest(client);
+                            InfoLog("Workload request handled");
+                            break;
+
+                        case workloadResponseCode:
+                            InfoLog("Handling workload response...");
+                            HandleWorkloadResponse(client);
+                            InfoLog("Handling workload response");
+                            break;
+
+                        default:
+                            ErrorLog("Unknown connection purpose recevied");
+                            break;
+
+                    }
+
+                    // Close connection
+
+                    client.Close();
+
+                    InfoLog("Connection closed");
 
                 }
+                catch (SocketException e)
+                {
+                    switch (e.SocketErrorCode)
+                    {
 
-                // Close connection
+                        case SocketError.TimedOut:
+                        case SocketError.ConnectionReset:
+                        case SocketError.Interrupted:
+                            ErrorLog("Connection error, closing client connection:\n" + e.Message);
+                            client.Close();
+                            continue;
 
-                client.Close();
+                        default:
+                            throw e;
 
-                InfoLog("Connection closed");
+                    }
+                }
 
             }
 
-
         }
-
-        //TODO - async listening?
 
         /// <summary>
         /// Checks if the provided workload has already been completed
@@ -228,7 +279,9 @@ namespace DistributedMandelbrot
         private bool WorkloadNeedsToBeRequested(Workload workload)
         {
 
-            if (distributedWorkloads.Contains(workload))
+            long currentTime = StopwatchMilliseconds;
+
+            if (distributedWorkloads.ContainsWhere(dw => dw.Matches(workload, currentTime)))
                 return false;
 
             if (CheckWorkloadCompleted(workload))
@@ -280,7 +333,9 @@ namespace DistributedMandelbrot
 
                 InfoLog("Sent worker workload to complete");
 
-                distributedWorkloads.Add(workload);
+                DistributedWorkload newDistributedWorkload = new(workload, StopwatchMilliseconds + distributedWorkloadTimeout);
+
+                distributedWorkloads.Add(newDistributedWorkload);
 
                 InfoLog("Registered workload as distributed");
 
@@ -306,7 +361,9 @@ namespace DistributedMandelbrot
 
             Workload workload = Workload.Receive(worker);
 
-            if (distributedWorkloads.Contains(workload))
+            long currentTime = StopwatchMilliseconds;
+
+            if (distributedWorkloads.ContainsWhere(dw => dw.Matches(workload, currentTime)))
             {
 
                 // Send acceptance code
@@ -326,7 +383,7 @@ namespace DistributedMandelbrot
 
                 // Mark workload completed
 
-                distributedWorkloads.Remove(workload);
+                distributedWorkloads.RemoveFirstWhere(dw => dw.Matches(workload, currentTime));
                 completedWorkloads.Add(workload);
 
                 InfoLog("Moved workload from distributed workloads to completed workloads");

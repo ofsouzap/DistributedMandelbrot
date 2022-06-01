@@ -8,8 +8,7 @@ namespace DistributedMandelbrot
     {
 
         private const int listenBacklog = 32;
-
-        private const uint maximumPermittedRequestChunkCount = 16;
+        private const int receiveTimeout = 100;
 
         #region Message Codes
 
@@ -69,6 +68,14 @@ namespace DistributedMandelbrot
             }
         }
 
+        private static void ConfigureClientSocket(Socket socket)
+        {
+
+            if (Program.TimeoutEnabled)
+                socket.ReceiveTimeout = receiveTimeout;
+
+        }
+
         /// <summary>
         /// Synchronously starts the data server listening and handling requests
         /// </summary>
@@ -99,6 +106,12 @@ namespace DistributedMandelbrot
 
                 InfoLog("Client accepted");
 
+                // Configure client socket settings
+
+                ConfigureClientSocket(client);
+
+                try { 
+
                 // Serve client
 
                 InfoLog("Serving client...");
@@ -112,6 +125,25 @@ namespace DistributedMandelbrot
                 client.Close();
 
                 InfoLog("Connection closed");
+
+                }
+                catch (SocketException e)
+                {
+                    switch (e.SocketErrorCode)
+                    {
+
+                        case SocketError.TimedOut:
+                        case SocketError.ConnectionReset:
+                        case SocketError.Interrupted:
+                            ErrorLog("Connection error, closing client connection:\n" + e.Message);
+                            client.Close();
+                            continue;
+
+                        default:
+                            throw e;
+
+                    }
+                }
 
             }
 

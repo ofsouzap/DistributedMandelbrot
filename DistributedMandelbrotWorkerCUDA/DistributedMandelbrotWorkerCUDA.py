@@ -158,7 +158,7 @@ def do_workload_single(addr: str, port: int) -> bool:
         print("Response accepted");
 
     elif response == WORKLOAD_REJECT_CODE:
-        print("Response rejected, ending program");
+        print("Response rejected");
         return True;
 
     else:
