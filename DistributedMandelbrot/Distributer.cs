@@ -51,7 +51,7 @@ namespace DistributedMandelbrot
         private event LogCallback InfoLog;
         private event LogCallback ErrorLog;
 
-        //TODO - add timeout to distributed workloads so if a client takes too long, the job can be reassigned
+        //TODO - add timeout to distributed workloads so if a worker takes too long, the job can be reassigned
 
         private readonly ConcurrentSet<Workload> distributedWorkloads;
         private readonly ConcurrentSet<Workload> completedWorkloads;
@@ -86,7 +86,7 @@ namespace DistributedMandelbrot
 
             // Set up socket
 
-            socket = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp);
+            socket = new(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp);
 
             InfoLog("Created socket");
 
@@ -164,7 +164,7 @@ namespace DistributedMandelbrot
                 // Accept connection
                 Socket client = socket.Accept();
 
-                InfoLog("Client accepted");
+                InfoLog("Worker accepted");
 
                 // Determine connection purpose
 
@@ -239,7 +239,7 @@ namespace DistributedMandelbrot
         }
 
         /// <summary>
-        /// Tries to get the next workload that needs to be sent to a client to process. If there are no more needed workloads, returns false
+        /// Tries to get the next workload that needs to be sent to a worker to process. If there are no more needed workloads, returns false
         /// </summary>
         private bool TryGetNextNeededWorkload(out Workload workload)
         {
@@ -249,7 +249,7 @@ namespace DistributedMandelbrot
                     for (uint indexImag = 0; indexImag < level; indexImag++)
                     {
 
-                        workload = new Workload(level, indexReal, indexImag);
+                        workload = new(level, indexReal, indexImag);
 
                         if (WorkloadNeedsToBeRequested(workload))
                             return true;
@@ -262,9 +262,9 @@ namespace DistributedMandelbrot
         }
 
         /// <summary>
-        /// Handle a client that is requesting a workload
+        /// Handle a worker that is requesting a workload
         /// </summary>
-        private void HandleWorkloadRequest(Socket client)
+        private void HandleWorkloadRequest(Socket worker)
         {
 
             if (TryGetNextNeededWorkload(out Workload workload))
@@ -272,13 +272,13 @@ namespace DistributedMandelbrot
 
                 // Workload available to distribute
 
-                client.Send(WorkloadAvailableCodeBytes);
+                worker.Send(WorkloadAvailableCodeBytes);
 
-                InfoLog("Told client that workload is available");
+                InfoLog("Told worker that workload is available");
 
-                workload.Send(client);
+                workload.Send(worker);
 
-                InfoLog("Sent client workload to complete");
+                InfoLog("Sent worker workload to complete");
 
                 distributedWorkloads.Add(workload);
 
@@ -290,37 +290,37 @@ namespace DistributedMandelbrot
 
                 // No workloads available to distribute
 
-                client.Send(WorkloadNotAvailableCodeBytes);
+                worker.Send(WorkloadNotAvailableCodeBytes);
 
-                InfoLog("Told client that no workload is available");
+                InfoLog("Told worker that no workload is available");
 
             }
 
         }
 
         /// <summary>
-        /// Handle a client that is returning a completed workload's data
+        /// Handle a worker that is returning a completed workload's data
         /// </summary>
-        private void HandleWorkloadResponse(Socket client)
+        private void HandleWorkloadResponse(Socket worker)
         {
 
-            Workload workload = Workload.Receive(client);
+            Workload workload = Workload.Receive(worker);
 
             if (distributedWorkloads.Contains(workload))
             {
 
                 // Send acceptance code
 
-                client.Send(WorkloadResponseAcceptCodeBytes);
+                worker.Send(WorkloadResponseAcceptCodeBytes);
 
-                InfoLog("Accepted client workload");
+                InfoLog("Accepted worker workload");
 
-                // Receive client data
+                // Receive worker data
 
                 byte[] data = new byte[DataChunk.dataChunkSize];
-                client.Receive(data, DataChunk.dataChunkSize, SocketFlags.None);
+                worker.Receive(data, DataChunk.dataChunkSize, SocketFlags.None);
 
-                InfoLog("Received client workload data");
+                InfoLog("Received worker workload data");
 
                 //TODO - check a few random values of the response to verify
 
@@ -348,9 +348,9 @@ namespace DistributedMandelbrot
 
                 // Send rejection code
 
-                client.Send(WorkloadResponseRejectCodeBytes);
+                worker.Send(WorkloadResponseRejectCodeBytes);
 
-                InfoLog("Rejected client workload");
+                InfoLog("Rejected worker workload");
 
             }
 

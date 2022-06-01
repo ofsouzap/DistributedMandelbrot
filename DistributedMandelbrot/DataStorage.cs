@@ -20,6 +20,8 @@ namespace DistributedMandelbrot
 
         private static readonly object indexFileLock = new();
 
+        private static readonly ConcurrentSet<string> dataFilesBeingAccessed = new();
+
         private static string DataChunkFilenameToPath(string filename)
             => Path.Combine(dataDirectory, filename);
 
@@ -28,52 +30,6 @@ namespace DistributedMandelbrot
         /// </summary>
         private static bool DataFilenameExists(string filename)
             => File.Exists(DataChunkFilenameToPath(filename));
-
-        #region Reading and Writing Data Chunks
-
-        /// <summary>
-        /// Try read a data chunk's data from a file
-        /// </summary>
-        /// <param name="path">The file path</param>
-        /// <param name="chunk">The chunk that has been read from the file</param>
-        /// <returns>If a chunk could be successfully read from the file</returns>
-        private static bool TryReadDataFile(string filename,
-            ref DataChunk chunk)
-        {
-
-            byte[] chunkData = new byte[DataChunk.dataChunkSize];
-
-            try
-            {
-                using FileStream file = File.OpenRead(DataChunkFilenameToPath(filename));
-                chunkData = DataChunk.DeserializeData(file);
-            }
-            catch (ArgumentException)
-            {
-                return false;
-            }
-
-            chunk.SetData(chunkData);
-
-            return true;
-
-        }
-
-        /// <summary>
-        /// Writes a data chunk to a specified file (existing or to-be-created)
-        /// </summary>
-        /// <param name="path">The file path to write the chunk to</param>
-        /// <param name="data">The data chunk whose data should be written to the file</param>
-        private static void WriteDataToFile(string filename,
-            DataChunk chunk)
-        {
-
-            using FileStream file = File.OpenWrite(DataChunkFilenameToPath(filename));
-            chunk.Serialize(file);
-
-        }
-
-        #endregion
 
         public struct IndexEntry
         {
@@ -115,14 +71,48 @@ namespace DistributedMandelbrot
             {
 
                 if (chunk.IsNeverChunk)
-                    return new IndexEntry(chunk.level, chunk.indexReal, chunk.indexImag, Type.Never);
+                    return new(chunk.level, chunk.indexReal, chunk.indexImag, Type.Never);
                 else if (chunk.IsImmediateChunk)
-                    return new IndexEntry(chunk.level, chunk.indexReal, chunk.indexImag, Type.Immediate);
+                    return new(chunk.level, chunk.indexReal, chunk.indexImag, Type.Immediate);
                 else
                 {
                     string filename = GenerateDataChunkFilename(chunk);
-                    return new IndexEntry(chunk.level, chunk.indexReal, chunk.indexImag, filename);
+                    return new(chunk.level, chunk.indexReal, chunk.indexImag, filename);
                 }
+
+            }
+
+            public DataChunk ToDataChunk()
+            {
+
+                DataChunk chunk;
+
+                switch (type)
+                {
+
+                    case Type.Regular:
+
+                        chunk = new(level, indexReal, indexImag);
+
+                        if (!TryReadDataFile(filename, ref chunk))
+                            throw new Exception("Unable to read chunk data from file");
+
+                        break;
+
+                    case Type.Never:
+                        chunk = DataChunk.CreateNeverChunk(level, indexReal, indexImag);
+                        break;
+
+                    case Type.Immediate:
+                        chunk = DataChunk.CreateImmediateChunk(level, indexReal, indexImag);
+                        break;
+
+                    default:
+                        throw new Exception("Unknown index entry type");
+
+                }
+
+                return chunk;
 
             }
 
@@ -148,7 +138,43 @@ namespace DistributedMandelbrot
 
         }
 
-        #region Reading Index File
+        #region Reading Data
+
+        /// <summary>
+        /// Try read a data chunk's data from a file
+        /// </summary>
+        /// <param name="path">The file path</param>
+        /// <param name="chunk">The chunk that has been read from the file</param>
+        /// <returns>If a chunk could be successfully read from the file</returns>
+        private static bool TryReadDataFile(string filename,
+            ref DataChunk chunk)
+        {
+
+            // Wait until file available
+            while (dataFilesBeingAccessed.Contains(filename))
+                Thread.Sleep(10);
+
+            dataFilesBeingAccessed.Add(filename);
+
+            byte[] chunkData = new byte[DataChunk.dataChunkSize];
+
+            try
+            {
+                using FileStream file = File.OpenRead(DataChunkFilenameToPath(filename));
+                chunkData = DataChunk.DeserializeData(file);
+            }
+            catch (ArgumentException)
+            {
+                return false;
+            }
+
+            chunk.SetData(chunkData);
+
+            dataFilesBeingAccessed.Remove(filename);
+
+            return true;
+
+        }
 
         /// <summary>
         /// Reads an entry from the index stream and outputs its data
@@ -185,11 +211,32 @@ namespace DistributedMandelbrot
 
                 filename = Encoding.ASCII.GetString(buffer, 0, filenameLength);
 
-                return new IndexEntry(level, indexReal, indexImag, filename);
+                return new(level, indexReal, indexImag, filename);
 
             }
             else
-                return new IndexEntry(level, indexReal, indexImag, type);
+                return new(level, indexReal, indexImag, type);
+
+        }
+
+        public struct QueryChunk
+        {
+
+            public uint level;
+            public uint indexReal;
+            public uint indexImag;
+
+            public QueryChunk(uint level, uint indexReal, uint indexImag)
+            {
+                this.level = level;
+                this.indexReal = indexReal;
+                this.indexImag = indexImag;
+            }
+
+            public bool MatchesIndexEntry(IndexEntry entry)
+                => entry.level == level
+                && entry.indexReal == indexReal
+                && entry.indexImag == indexImag;
 
         }
 
@@ -201,25 +248,41 @@ namespace DistributedMandelbrot
         /// <param name="qIndexImag">The imaginary index of data chunk being looked for</param>
         /// <param name="filename">The filename of the found data chunk file</param>
         /// <returns>Whether a data chunk file was found for the specified chunk</returns>
-        public static bool TryFindChunkFilename(uint qLevel,
-            uint qIndexReal,
-            uint qIndexImag,
-            out string filename)
+        public static DataChunk?[] TryLoadChunks(QueryChunk[] queries)
         {
+
+            // Initialise output chunks array
+
+            DataChunk?[] chunks = new DataChunk[queries.Length];
+
+            for (int i = 0; i < chunks.Length; i++)
+                chunks[i] = null;
+
+            // Look through index
 
             foreach (IndexEntry entry in GetIndexEntriesEnumerator())
             {
-                if (entry.level == qLevel
-                    && entry.indexReal == qIndexReal
-                    && entry.indexImag == qIndexImag)
+                
+                for (int qIndex = 0; qIndex < queries.Length; qIndex++)
                 {
-                    filename = entry.filename;
-                    return true;
+
+                    QueryChunk query = queries[qIndex];
+
+                    if (query.MatchesIndexEntry(entry))
+                    {
+
+                        chunks[qIndex] = entry.ToDataChunk();
+
+                        if (chunks.All(c => c != null))
+                            return chunks; // If all found, return without needing to look at other index entries
+
+                    }
+
                 }
+
             }
 
-            filename = string.Empty;
-            return false;
+            return chunks;
 
         }
 
@@ -257,7 +320,31 @@ namespace DistributedMandelbrot
 
         #endregion
 
-        #region Writing Index File
+        #region Writing Data
+
+        /// <summary>
+        /// Writes a data chunk to a specified file (existing or to-be-created)
+        /// </summary>
+        /// <param name="path">The file path to write the chunk to</param>
+        /// <param name="data">The data chunk whose data should be written to the file</param>
+        private static void WriteDataToFile(string filename,
+            DataChunk chunk)
+        {
+
+            // Wait until file available
+            while (dataFilesBeingAccessed.Contains(filename))
+                Thread.Sleep(10);
+
+            dataFilesBeingAccessed.Add(filename);
+
+            using (FileStream file = File.OpenWrite(DataChunkFilenameToPath(filename)))
+            {
+                chunk.Serialize(file);
+            }
+
+            dataFilesBeingAccessed.Remove(filename);
+
+        }
 
         /// <summary>
         /// Writes an index entry for a chunk with a specified filename to the index filestream
@@ -317,7 +404,6 @@ namespace DistributedMandelbrot
         /// <summary>
         /// Saves a data chunk and adds it to the index
         /// </summary>
-        
         public static void SaveDataChunk(DataChunk chunk)
         {
 

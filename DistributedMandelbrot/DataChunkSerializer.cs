@@ -7,9 +7,23 @@ namespace DistributedMandelbrot
 
         private abstract class Serializer
         {
+
             public abstract byte GetCode();
-            public abstract void Serialize(Stream stream, byte[] data);
-            public abstract byte[] Deserialize(Stream stream);
+
+            public void Serialize(Stream stream, byte[] data)
+            {
+                SerializeCode(stream);
+                SerializeData(stream, data);
+            }
+
+            private void SerializeCode(Stream stream)
+            {
+                stream.Write(new byte[1] { GetCode() }, 0, 1);
+            }
+
+            protected abstract void SerializeData(Stream stream, byte[] data);
+            public abstract byte[] DeserializeData(Stream stream);
+
         }
 
         private class RawSerializer : Serializer
@@ -17,16 +31,12 @@ namespace DistributedMandelbrot
 
             public override byte GetCode() => 0x00;
 
-            public override void Serialize(Stream stream, byte[] data)
+            protected override void SerializeData(Stream stream, byte[] data)
             {
-                
-                stream.Write(new byte[1] { GetCode() }, 0, 1);
-
                 stream.Write(data, 0, data.Length);
-
             }
 
-            public override byte[] Deserialize(Stream stream)
+            public override byte[] DeserializeData(Stream stream)
             {
 
                 byte[] data = new byte[dataChunkSize];
@@ -43,7 +53,7 @@ namespace DistributedMandelbrot
 
             public override byte GetCode() => 0x01;
 
-            public override void Serialize(Stream stream, byte[] data)
+            protected override void SerializeData(Stream stream, byte[] data)
             {
 
                 stream.Write(new byte[1] { GetCode() }, 0, 1);
@@ -66,25 +76,32 @@ namespace DistributedMandelbrot
 
                         // Write run
 
+                        if (runLength == 0)
+                            throw new Exception("Trying to write run of length 0");
+
                         stream.Write(BitConverter.GetBytes(runLength), 0, 4);
                         stream.Write(new byte[1] { runValue }, 0, 1);
 
-                        // Reset run
+                        // Reset run to current value
 
-                        runLength = 0;
+                        runLength = 1;
+                        runValue = value;
 
                     }
 
                 }
 
-                // Write final run
+                // Write final run (if exists)
+
+                if (runLength == 0)
+                    throw new WaitHandleCannotBeOpenedException("No end run to write");
 
                 stream.Write(BitConverter.GetBytes(runLength), 0, 4);
                 stream.Write(new byte[1] { runValue }, 0, 1);
 
             }
 
-            public override byte[] Deserialize(Stream stream)
+            public override byte[] DeserializeData(Stream stream)
             {
 
                 byte[] data = new byte[dataChunkSize];
@@ -111,6 +128,9 @@ namespace DistributedMandelbrot
 
                     if (dataIndex + runLength >= dataChunkSize)
                         throw new Exception("Data exceeds chunk expected length");
+
+                    if (runLength == 0)
+                        throw new Exception("Encountered run of length 0");
 
                     // Add run data
 

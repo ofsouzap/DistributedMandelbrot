@@ -123,6 +123,24 @@ namespace DistributedMandelbrot
             this.data = data;
         }
 
+        public static DataChunk CreateIdenticalChunk(uint level, uint indexReal, uint indexImag, byte value)
+        {
+
+            byte[] data = new byte[dataChunkSize];
+
+            for (int i = 0; i < dataChunkSize; i++)
+                data[i] = value;
+
+            return new(level, indexReal, indexImag, data);
+
+        }
+
+        public static DataChunk CreateNeverChunk(uint level, uint indexReal, uint indexImag)
+            => CreateIdenticalChunk(level, indexReal, indexImag, 0);
+
+        public static DataChunk CreateImmediateChunk(uint level, uint indexReal, uint indexImag)
+            => CreateIdenticalChunk(level, indexReal, indexImag, 1);
+
         #endregion
 
         public void SetData(byte[] data)
@@ -166,7 +184,7 @@ namespace DistributedMandelbrot
             foreach (Serializer serializer in serializers)
             {
 
-                SizeCountStream sizeStream = new SizeCountStream();
+                SizeCountStream sizeStream = new();
 
                 serializer.Serialize(sizeStream, data);
 
@@ -212,7 +230,7 @@ namespace DistributedMandelbrot
             if (chunkSerializer == null)
                 throw new Exception("No serializer found for chunk file");
 
-            return chunkSerializer.Deserialize(stream);
+            return chunkSerializer.DeserializeData(stream);
 
         }
 

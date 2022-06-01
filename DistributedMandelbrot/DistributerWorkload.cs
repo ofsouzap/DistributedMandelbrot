@@ -75,7 +75,7 @@ namespace DistributedMandelbrot
                 socket.Receive(buffer, 4, SocketFlags.None);
                 indexImag = BitConverter.ToUInt32(buffer, 0);
 
-                return new Workload(level, indexReal, indexImag);
+                return new(level, indexReal, indexImag);
 
             }
 
