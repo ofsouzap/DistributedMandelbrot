@@ -51,7 +51,7 @@ namespace DistributedMandelbrot
         private readonly Stopwatch stopwatch;
         private long StopwatchMilliseconds => stopwatch.ElapsedMilliseconds;
 
-        private System.Timers.Timer distributedWorkloadCleanupTimer;
+        private readonly System.Timers.Timer distributedWorkloadCleanupTimer;
 
         private bool listening;
         private readonly object listeningLock = new();

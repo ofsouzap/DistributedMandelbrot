@@ -12,18 +12,19 @@ namespace DistributedMandelbrot
         //     (level[uint32])(indexReal[uint32])(indexImag[uint32])(entryType[uint8])(filenameLength[int32])(filename[char[filenameLength]])
         // N.B. level, indexReal and indexImag are unsigned but filenameLength is signed!
 
-        public const string dataDirectory = "Data/";
+        public const string dataDirectoryName = "Data/";
+        public static string DataDirectoryPath => Path.Combine(Program.DataDirectoryParent, dataDirectoryName);
 
         public const string indexFilename = "_index.dat";
 
-        public static string IndexFilePath => Path.Combine(dataDirectory, indexFilename);
+        public static string IndexFilePath => Path.Combine(DataDirectoryPath, indexFilename);
 
         private static readonly object indexFileLock = new();
 
         private static readonly ConcurrentSet<string> dataFilesBeingAccessed = new();
 
         private static string DataChunkFilenameToPath(string filename)
-            => Path.Combine(dataDirectory, filename);
+            => Path.Combine(DataDirectoryPath, filename);
 
         /// <summary>
         /// Checks if a data chunk file exists with the specified filename
@@ -119,7 +120,7 @@ namespace DistributedMandelbrot
         }
 
         private static bool CheckDataDirectoryExists()
-            => Directory.Exists(dataDirectory);
+            => Directory.Exists(DataDirectoryPath);
 
         private static bool CheckIndexFileExists()
             => File.Exists(IndexFilePath);
@@ -131,7 +132,7 @@ namespace DistributedMandelbrot
         {
 
             if (!CheckDataDirectoryExists())
-                Directory.CreateDirectory(dataDirectory);
+                Directory.CreateDirectory(DataDirectoryPath);
 
             if (!CheckIndexFileExists())
                 File.Create(IndexFilePath);

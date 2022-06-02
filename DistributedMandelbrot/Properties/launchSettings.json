@@ -1,7 +1,12 @@
 {
   "profiles": {
-    "DistributedMandelbrot": {
-      "commandName": "Project"
+    "Default (4,10,20)": {
+      "commandName": "Project",
+      "commandLineArgs": "-l 4,10,20"
+    },
+    "Custom Data Directory (10)": {
+      "commandName": "Project",
+      "commandLineArgs": "-l 10 -o DataAlt/"
     }
   }
 }
