@@ -2,11 +2,11 @@
   "profiles": {
     "Default (4,10,20)": {
       "commandName": "Project",
-      "commandLineArgs": "-l 4,10,20"
+      "commandLineArgs": "-l 4:256,10:1024,20:1024"
     },
     "Custom Data Directory (10)": {
       "commandName": "Project",
-      "commandLineArgs": "-l 10 -o DataAlt/"
+      "commandLineArgs": "-l 10:1024 -o DataAlt/"
     }
   }
 }

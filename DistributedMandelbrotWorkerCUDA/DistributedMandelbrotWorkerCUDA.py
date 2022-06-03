@@ -68,6 +68,7 @@ def calc_mb_value(r: np.float64,
     return 0;
 
 def process_workload(level: int,
+    mrd: int,
     index_real: int,
     index_imag: int) -> np.ndarray:
 
@@ -76,7 +77,6 @@ def process_workload(level: int,
     start_r = MIN_AXIS + (chunk_range * index_real);
     start_i = MIN_AXIS + (chunk_range * index_imag);
 
-    mrd = 1024;
     definition = 4096; # Chunk size
 
     r, i = gen_arrays(start_r = start_r,
@@ -102,10 +102,11 @@ def process_workload(level: int,
 def receive_workload(sock: socket.socket):
 
     level = unpack("I", sock.recv(4))[0];
+    mrd = unpack("I", sock.recv(4))[0];
     indexReal = unpack("I", sock.recv(4))[0];
     indexImag = unpack("I", sock.recv(4))[0];
 
-    return level, indexReal, indexImag;
+    return level, mrd, indexReal, indexImag;
 
 def do_workload_single(addr: str, port: int) -> bool:
 
@@ -138,7 +139,7 @@ def do_workload_single(addr: str, port: int) -> bool:
 
     print("Starting calculation...");
 
-    out = process_workload(workload[0], workload[1], workload[2]);
+    out = process_workload(workload[0], workload[1], workload[2], workload[3]);
 
     print("Calculation complete");
 
@@ -150,7 +151,7 @@ def do_workload_single(addr: str, port: int) -> bool:
 
     sock.send(pack("B", RESPONSE_CODE));
 
-    sock.send(pack("III", workload[0], workload[1], workload[2]));
+    sock.send(pack("IIII", workload[0], workload[1], workload[2], workload[3]));
 
     response = sock.recv(1)[0];
 

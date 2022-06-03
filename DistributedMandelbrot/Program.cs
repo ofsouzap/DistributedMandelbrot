@@ -20,7 +20,7 @@ namespace DistributedMandelbrot
 
             public IPAddress distributerAddress;
             public int distributerPort;
-            public uint[] distributerLevels;
+            public Distributer.LevelSetting[] distributerLevelSettings;
             public bool distributerInfoLogEnabled;
             public bool distributerErrorLogEnabled;
 
@@ -31,7 +31,7 @@ namespace DistributedMandelbrot
 
             public string dataDirectoryParent;
 
-            public bool DistributerLevelsSet => distributerLevels != null && distributerLevels.Length > 0;
+            public bool DistributerLevelsSet => distributerLevelSettings != null && distributerLevelSettings.Length > 0;
 
             public IPEndPoint GetDistributerEndpoint()
                 => new(distributerAddress, distributerPort);
@@ -68,7 +68,7 @@ namespace DistributedMandelbrot
 
                 distributerAddress = IPAddress.Any;
                 distributerPort = defaultDistributerPort;
-                distributerLevels = Array.Empty<uint>();
+                distributerLevelSettings = Array.Empty<Distributer.LevelSetting>();
                 distributerInfoLogEnabled = true;
                 distributerErrorLogEnabled = true;
 
@@ -123,7 +123,7 @@ namespace DistributedMandelbrot
 
                 Task distributerTask = CreateDistributerTask(
                     endpoint: Settings.GetDistributerEndpoint(),
-                    levels: Settings.distributerLevels,
+                    levels: Settings.distributerLevelSettings,
                     infoCallback: Settings.GetDistributerInfoLogCallback(),
                     errCallback: Settings.GetDistributerErrorLogCallback()
                 );
@@ -182,7 +182,7 @@ DistributedMandelbrot server program
 
 Settings:
 -h, --help - help page
--l, --levels [x,y,...] - specify the levels that the job distributer will send jobs for (required)
+-l, --levels [l1:mrd1,l2:mrd2,...] - specify the levels (l) and the respective maximum recursion depths (mrd) that the job distributer will send jobs for (required)
 -t, --timeout [true|false] - timeout enabled (default true)
 -di, -da, --distributer-ip, --distributer-addr [ipaddress] - specify job distributer ip address (default any address)
 -dp, --distributer-port [port] - specify job distributer port (default 59010)
@@ -227,17 +227,27 @@ Settings:
                         if (q.Count == 0)
                             throw new ArgumentException("No argument provided for levels setting");
 
-                        string[] parts = q.Dequeue().Split(',');
+                        string[] levelSettingValues = q.Dequeue().Split(',');
 
-                        settings.distributerLevels = new uint[parts.Length];
+                        settings.distributerLevelSettings = new Distributer.LevelSetting[levelSettingValues.Length];
 
-                        for (int i = 0; i < parts.Length; i++)
+                        for (int i = 0; i < levelSettingValues.Length; i++)
                         {
 
-                            string part = parts[i];
+                            string levelSettingValue = levelSettingValues[i];
 
-                            if (!uint.TryParse(part, out settings.distributerLevels[i]))
+                            string[] levelSettingParts = levelSettingValue.Split(':');
+
+                            if (levelSettingParts.Length != 2)
+                                throw new ArgumentException("Invalid level setting provided");
+
+                            if (!uint.TryParse(levelSettingParts[0], out uint levelSettingLevel))
                                 throw new ArgumentException("Invalid level provided");
+
+                            if (!uint.TryParse(levelSettingParts[1], out uint levelSettingMaximumRecursionDepth))
+                                throw new ArgumentException("Invalid maximum recusion depth provided");
+
+                            settings.distributerLevelSettings[i] = new Distributer.LevelSetting(levelSettingLevel, levelSettingMaximumRecursionDepth);
 
                         }
 
@@ -427,7 +437,7 @@ Settings:
         #endregion
 
         private static Task CreateDistributerTask(IPEndPoint endpoint,
-            uint[] levels,
+            Distributer.LevelSetting[] levels,
             Distributer.LogCallback infoCallback,
             Distributer.LogCallback errCallback)
         {

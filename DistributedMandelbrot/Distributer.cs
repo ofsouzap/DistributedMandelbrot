@@ -58,10 +58,24 @@ namespace DistributedMandelbrot
 
         public delegate void LogCallback(string msg);
 
+        public struct LevelSetting
+        {
+
+            public uint level;
+            public uint maximumRecusionDepth;
+
+            public LevelSetting(uint level, uint maximumRecusionDepth)
+            {
+                this.level = level;
+                this.maximumRecusionDepth = maximumRecusionDepth;
+            }
+
+        }
+
         /// <summary>
-        /// The levels the distributer distributes tasks for
+        /// The levels and maximum recursion depths the distributer distributes tasks for
         /// </summary>
-        private readonly uint[] levels;
+        private readonly LevelSetting[] levelSettings;
 
         private event LogCallback InfoLog;
         private event LogCallback ErrorLog;
@@ -70,7 +84,7 @@ namespace DistributedMandelbrot
         private readonly ConcurrentSet<Workload> completedWorkloads;
 
         public Distributer(IPEndPoint endpoint,
-            uint[] levels,
+            LevelSetting[] levelSettings,
             LogCallback InfoLog,
             LogCallback ErrorLog)
         {
@@ -94,15 +108,15 @@ namespace DistributedMandelbrot
 
             // Check and update handled levels
 
-            foreach (uint level in levels)
-                if (distributerHandledLevels.Contains(level))
-                    throw new ArgumentException("One of the chosen levels for this distributer is already being handled by another distributer");
+            foreach (LevelSetting levelSetting in levelSettings)
+                if (distributerHandledLevels.Contains(levelSetting.level))
+                    throw new ArgumentException("One of the chosen levels for this distributer is already being handled by a distributer");
                 else
-                    distributerHandledLevels.Add(level);
+                    distributerHandledLevels.Add(levelSetting.level);
 
-            // Copy levels into this.levels so it can't be edited whilst the distributer runs
-            this.levels = new uint[levels.Length];
-            Array.Copy(levels, this.levels, levels.Length);
+            // Copy level settings into this.levelSettings so it can't be edited whilst the distributer runs
+            this.levelSettings = new LevelSetting[levelSettings.Length];
+            Array.Copy(levelSettings, this.levelSettings, levelSettings.Length);
 
             // Set up workload bags
 
@@ -129,8 +143,8 @@ namespace DistributedMandelbrot
             distributedWorkloadCleanupTimer.Stop();
             distributedWorkloadCleanupTimer.Dispose();
 
-            foreach (uint level in levels)
-                distributerHandledLevels.Remove(level);
+            foreach (LevelSetting levelSetting in levelSettings)
+                distributerHandledLevels.Remove(levelSetting.level);
 
             socket.Close();
 
@@ -151,12 +165,12 @@ namespace DistributedMandelbrot
         private IEnumerable<Workload> GetRelevantCompletedWorkloads()
         {
 
-            if (levels == null || levels.Length < 1)
+            if (levelSettings == null || levelSettings.Length < 1)
                 throw new Exception("Levels not initialised before getting completed levels");
 
             return DataStorage.GetIndexEntriesEnumerator()
-                .Where(entry => levels.Contains(entry.level))
-                .Select(entry => new Workload(entry.level, entry.indexReal, entry.indexImag));
+                .Where(entry => levelSettings.Any(ls => ls.level == entry.level))
+                .Select(entry => new Workload(entry.level, null, entry.indexReal, entry.indexImag));
 
         }
 
@@ -321,12 +335,12 @@ namespace DistributedMandelbrot
         private bool TryGetNextNeededWorkload(out Workload workload)
         {
 
-            foreach (uint level in levels)
-                for (uint indexReal = 0; indexReal < level; indexReal++)
-                    for (uint indexImag = 0; indexImag < level; indexImag++)
+            foreach (LevelSetting levelSetting in levelSettings)
+                for (uint indexReal = 0; indexReal < levelSetting.level; indexReal++)
+                    for (uint indexImag = 0; indexImag < levelSetting.level; indexImag++)
                     {
 
-                        workload = new(level, indexReal, indexImag);
+                        workload = new(levelSetting.level, levelSetting.maximumRecusionDepth, indexReal, indexImag);
 
                         if (WorkloadNeedsToBeRequested(workload))
                             return true;
@@ -402,8 +416,6 @@ namespace DistributedMandelbrot
                 worker.Receive(data, DataChunk.dataChunkSize, SocketFlags.None);
 
                 InfoLog("Received worker workload data");
-
-                //TODO - check a few random values of the response to verify
 
                 // Mark workload completed
 
