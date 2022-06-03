@@ -3,6 +3,7 @@ from matplotlib import pyplot as plt;
 from matplotlib import cm as colormap;
 import socket;
 from struct import pack, unpack;
+from typing import Tuple as tTuple;
 
 CHUNK_WIDTH = 4096;
 
@@ -74,12 +75,14 @@ def get_chunk(srv_addr: str,
 
     # Get status
 
-    status = unpack("B", s.recv(1));
+    status = unpack("B", s.recv(1))[0];
 
     if status == REQUEST_NOT_AVAILABLE_CODE:
-        return None;
+        return None, False;
     elif status == REQUEST_REJECT_CODE:
         raise Exception("Request was rejected");
+    elif status != REQUEST_ACCEPT_CODE:
+        raise Exception("Unknown request status code: " + str(status));
 
     # Get response length
 
@@ -102,7 +105,7 @@ def get_chunk(srv_addr: str,
 
     s.close();
 
-    return vs;
+    return vs, True;
 
 def data_to_img_array(data: np.ndarray) -> np.ndarray:
 
@@ -148,11 +151,15 @@ def main():
     index_real = int(input("Index Re> "));
     index_imag = int(input("Index Im> "));
 
-    data = get_chunk(srv_addr = srv_addr,
+    data, success = get_chunk(srv_addr = srv_addr,
         srv_port = srv_port,
         level = level,
         index_real = index_real,
         index_imag = index_imag);
+
+    if not success:
+        print("Chunk isn't available");
+        return;
 
     img_data = data_to_img_array(data);
 

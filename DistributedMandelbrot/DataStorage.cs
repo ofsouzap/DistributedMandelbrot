@@ -139,6 +139,65 @@ namespace DistributedMandelbrot
 
         }
 
+        /// <summary>
+        /// Tries to open the index file for reading. If it fails because another process is using the file, keeps trying.
+        /// </summary>
+        private static FileStream TryUntilOpenFileRead(string path)
+        {
+
+            while (true)
+            {
+                try
+                {
+                    // Try returned the opened file
+                    return File.OpenRead(path);
+                }
+                catch (IOException)
+                {
+                    // Keep trying after waiting briefly
+                    Thread.Sleep(10);
+                    continue;
+                }
+                catch
+                {
+                    // Throw any other exceptions
+                    throw;
+                }
+            }
+
+        }
+
+        /// <summary>
+        /// Tries to open the index file for writing. If it fails because another process is using the file, keeps trying.
+        /// </summary>
+        private static FileStream TryUntilOpenFileWrite(string path,
+            bool appendMode = false)
+        {
+
+            FileMode fileMode = appendMode ? FileMode.Append : FileMode.OpenOrCreate;
+
+            while (true)
+            {
+                try
+                {
+                    // Try returned the opened file
+                    return File.Open(path, fileMode, FileAccess.Write);
+                }
+                catch (IOException)
+                {
+                    // Keep trying after waiting briefly
+                    Thread.Sleep(10);
+                    continue;
+                }
+                catch
+                {
+                    // Throw any other exceptions
+                    throw;
+                }
+            }
+
+        }
+
         #region Reading Data
 
         /// <summary>
@@ -161,7 +220,7 @@ namespace DistributedMandelbrot
 
             try
             {
-                using FileStream file = File.OpenRead(DataChunkFilenameToPath(filename));
+                using FileStream file = TryUntilOpenFileRead(DataChunkFilenameToPath(filename));
                 chunkData = DataChunk.DeserializeData(file);
             }
             catch (ArgumentException)
@@ -295,7 +354,7 @@ namespace DistributedMandelbrot
 
                 SetUpDataDirectoryIfNeeded();
 
-                using FileStream file = File.OpenRead(IndexFilePath);
+                using FileStream file = TryUntilOpenFileRead(IndexFilePath);
 
                 while (file.Position < file.Length)
                 {
@@ -338,7 +397,7 @@ namespace DistributedMandelbrot
 
             dataFilesBeingAccessed.Add(filename);
 
-            using (FileStream file = File.OpenWrite(DataChunkFilenameToPath(filename)))
+            using (FileStream file = TryUntilOpenFileWrite(DataChunkFilenameToPath(filename), appendMode: false))
             {
                 chunk.Serialize(file);
             }
@@ -413,14 +472,14 @@ namespace DistributedMandelbrot
             lock (indexFileLock)
             {
 
-                using FileStream file = File.Open(IndexFilePath, FileMode.Append, FileAccess.Write);
+                using FileStream file = TryUntilOpenFileWrite(IndexFilePath, appendMode: true);
 
                 WriteIndexEntry(file, newEntry);
 
-                if (newEntry.type == IndexEntry.Type.Regular)
-                    WriteDataToFile(newEntry.filename, chunk);
-
             }
+
+            if (newEntry.type == IndexEntry.Type.Regular)
+                WriteDataToFile(newEntry.filename, chunk);
 
         }
 

@@ -412,16 +412,24 @@ namespace DistributedMandelbrot
 
                 InfoLog("Moved workload from distributed workloads to completed workloads");
 
-                // Save data chunk
+                // Create data chunk to save
 
                 DataChunk newChunk = new(level: workload.level,
                     indexReal: workload.indexReal,
                     indexImag: workload.indexImag,
                     data: data);
 
-                DataStorage.SaveDataChunk(newChunk);
+                // Have chunk saved asynchronously so distributer can handle other clients in the meantime
 
-                InfoLog("Saved data chunk");
+                Task saveChunkTask = new(() =>
+                {
+                    DataStorage.SaveDataChunk(newChunk);
+                    InfoLog("A data chunk has finished being saved");
+                });
+
+                saveChunkTask.Start();
+
+                InfoLog("Sent data chunk to be saved");
 
             }
             else
