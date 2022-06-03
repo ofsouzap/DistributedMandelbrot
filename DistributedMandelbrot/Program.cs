@@ -119,9 +119,15 @@ namespace DistributedMandelbrot
                 if (!Settings.DistributerLevelsSet)
                     throw new ArgumentException("Distributer levels weren't set when trying to run program");
 
+                // Data Storage Manager
+
+                DataStorageManager dataStorageManager = CreateDataStorageManager();
+                Task dataStorageManagerTask = CreateDataStorageManagerTask(dataStorageManager);
+
                 // Distributer
 
                 Task distributerTask = CreateDistributerTask(
+                    dataStorageManager: dataStorageManager,
                     endpoint: Settings.GetDistributerEndpoint(),
                     levels: Settings.distributerLevels,
                     infoCallback: Settings.GetDistributerInfoLogCallback(),
@@ -131,6 +137,7 @@ namespace DistributedMandelbrot
                 // Data Server
 
                 Task dataServerTask = CreateDataServerTask(
+                    dataStorageManager: dataStorageManager,
                     endpoint: Settings.GetDataServerEndpoint(),
                     infoCallback: Settings.GetDataServerInfoLogCallback(),
                     errCallback: Settings.GetDataServerErrorLogCallback()
@@ -138,6 +145,7 @@ namespace DistributedMandelbrot
 
                 // Run tasks
 
+                dataStorageManagerTask.Start();
                 distributerTask.Start();
                 dataServerTask.Start();
 
@@ -145,6 +153,7 @@ namespace DistributedMandelbrot
 
                 distributerTask.Wait();
                 dataServerTask.Wait();
+                dataStorageManagerTask.Wait();
 
             }
             
@@ -426,13 +435,26 @@ Settings:
 
         #endregion
 
-        private static Task CreateDistributerTask(IPEndPoint endpoint,
+        private static DataStorageManager CreateDataStorageManager()
+            => new();
+
+        private static Task CreateDataStorageManagerTask(DataStorageManager dataStorageManager)
+        {
+
+            Task task = new(() => dataStorageManager.StartProcessingJobsSync());
+
+            return task;
+
+        }
+
+        private static Task CreateDistributerTask(DataStorageManager dataStorageManager,
+            IPEndPoint endpoint,
             uint[] levels,
             Distributer.LogCallback infoCallback,
             Distributer.LogCallback errCallback)
         {
 
-            Distributer distributer = new(endpoint, levels, infoCallback, errCallback);
+            Distributer distributer = new(dataStorageManager, endpoint, levels, infoCallback, errCallback);
 
             Task task = new(() => distributer.StartListeningSync());
 
@@ -440,12 +462,13 @@ Settings:
 
         }
 
-        private static Task CreateDataServerTask(IPEndPoint endpoint,
+        private static Task CreateDataServerTask(DataStorageManager dataStorageManager, 
+            IPEndPoint endpoint,
             DataServer.LogCallback infoCallback,
             DataServer.LogCallback errCallback)
         {
 
-            DataServer dataServer = new(endpoint, infoCallback, errCallback);
+            DataServer dataServer = new(dataStorageManager, endpoint, infoCallback, errCallback);
 
             Task task = new(() => dataServer.StartListeningSync());
 

@@ -46,6 +46,8 @@ namespace DistributedMandelbrot
 
         #endregion
 
+        private readonly DataStorageManager dataStorageManager;
+
         private readonly Socket socket;
 
         private readonly Stopwatch stopwatch;
@@ -67,13 +69,21 @@ namespace DistributedMandelbrot
         private event LogCallback ErrorLog;
 
         private readonly ConcurrentSet<DistributedWorkload> distributedWorkloads;
-        private readonly ConcurrentSet<Workload> completedWorkloads;
 
-        public Distributer(IPEndPoint endpoint,
+        private ConcurrentSet<Workload> completedWorkloads;
+        private bool completedWorkloadsInitialised;
+        private readonly object completedWorkloadsLock = new();
+
+        public Distributer(DataStorageManager dataStorageManager,
+            IPEndPoint endpoint,
             uint[] levels,
             LogCallback InfoLog,
             LogCallback ErrorLog)
         {
+
+            // Set data storage manager
+
+            this.dataStorageManager = dataStorageManager;
 
             // Create stopwatch
 
@@ -107,7 +117,14 @@ namespace DistributedMandelbrot
             // Set up workload bags
 
             distributedWorkloads = new();
-            completedWorkloads = new(GetRelevantCompletedWorkloads());
+
+            lock (completedWorkloadsLock)
+            {
+                completedWorkloadsInitialised = false;
+                completedWorkloads = new();
+            }
+
+            StartLoadingRelevantCompletedWorkloads(); // Start loading of the completed workloads in the background
 
             // Set up socket
 
@@ -146,6 +163,25 @@ namespace DistributedMandelbrot
         }
 
         /// <summary>
+        /// Starts loading the relevant completed workloads into their list asynchronously
+        /// </summary>
+        private void StartLoadingRelevantCompletedWorkloads()
+        {
+
+            Task loadingTask = new(() =>
+            {
+                lock (completedWorkloadsLock)
+                {
+                    completedWorkloads = new(GetRelevantCompletedWorkloads());
+                    completedWorkloadsInitialised = true;
+                }
+            });
+
+            loadingTask.Start();
+
+        }
+
+        /// <summary>
         /// Gets all the workloads that are already completed with a level that this distributer is registered to distribute tasks for
         /// </summary>
         private IEnumerable<Workload> GetRelevantCompletedWorkloads()
@@ -154,8 +190,30 @@ namespace DistributedMandelbrot
             if (levels == null || levels.Length < 1)
                 throw new Exception("Levels not initialised before getting completed levels");
 
-            return DataStorage.GetIndexEntriesEnumerator()
-                .Where(entry => levels.Contains(entry.level))
+            DataStorageManager.IndexEntry[] entries = Array.Empty<DataStorageManager.IndexEntry>();
+            bool entriesLoaded = false;
+
+            // Add data storage manager job to find relevant chunks
+
+            dataStorageManager.AddJob(new DataStorageManager.GetCompletedLevelsChunksJob(
+                levels,
+                es =>
+                {
+                    entriesLoaded = true;
+                    entries = es;
+                }
+            ));
+
+            // Wait until entries loaded
+
+            InfoLog("Waiting for completed chunks to be found...");
+
+            while (!entriesLoaded)
+                Thread.Sleep(10);
+
+            InfoLog("Completed chunks returned");
+
+            return entries
                 .Select(entry => new Workload(entry.level, entry.indexReal, entry.indexImag));
 
         }
@@ -201,6 +259,15 @@ namespace DistributedMandelbrot
             // Set distributer to listening
 
             SetListening(true);
+
+            // Wait for completed workloads to be found before starting
+
+            InfoLog("Starting to wait for completed workloads to be found before opening server...");
+
+            while (!completedWorkloadsInitialised)
+                Thread.Sleep(10);
+
+            InfoLog("Completed workloads found");
 
             // Set socket to listen
 
@@ -403,8 +470,6 @@ namespace DistributedMandelbrot
 
                 InfoLog("Received worker workload data");
 
-                //TODO - check a few random values of the response to verify
-
                 // Mark workload completed
 
                 distributedWorkloads.RemoveOneWhere(dw => dw.Matches(workload, currentTime));
@@ -412,16 +477,22 @@ namespace DistributedMandelbrot
 
                 InfoLog("Moved workload from distributed workloads to completed workloads");
 
-                // Save data chunk
+                // Create data chunk to save
 
                 DataChunk newChunk = new(level: workload.level,
                     indexReal: workload.indexReal,
                     indexImag: workload.indexImag,
                     data: data);
 
-                DataStorage.SaveDataChunk(newChunk);
+                // Send chunk to data storage manager to save
+                // No need to wait for this to complete
 
-                InfoLog("Saved data chunk");
+                dataStorageManager.AddJob(new DataStorageManager.SaveChunkJob(
+                    newChunk,
+                    () => { }
+                ));
+
+                InfoLog("Sent data chunk to data storage manager to save");
 
             }
             else

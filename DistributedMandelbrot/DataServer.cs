@@ -24,6 +24,8 @@ namespace DistributedMandelbrot
         private bool listening;
         private readonly object listeningLock = new();
 
+        private DataStorageManager dataStorageManager;
+
         public delegate void LogCallback(string msg);
 
         private event LogCallback InfoLog;
@@ -31,10 +33,13 @@ namespace DistributedMandelbrot
 
         private readonly Socket socket;
 
-        public DataServer(IPEndPoint endpoint,
+        public DataServer(DataStorageManager dataStorageManager,
+            IPEndPoint endpoint,
             LogCallback InfoLog,
             LogCallback ErrorLog)
         {
+
+            this.dataStorageManager = dataStorageManager;
 
             this.InfoLog = InfoLog;
             this.ErrorLog = ErrorLog;
@@ -177,32 +182,109 @@ namespace DistributedMandelbrot
                 || indexImag >= level)
             {
                 client.Send(RequestRejectedCodeBytes);
-                ErrorLog("Client requested with invalid parameters. Rejecting request");
+                InfoLog("Client requested with invalid parameters. Rejecting request");
                 return;
             }
 
-            // Get requested chunks
+            // Get requested chunk
 
-            DataStorage.QueryChunk qChunk = new(level, indexReal, indexImag);
+            DataStorageManager.QueryChunk qChunk = new(level, indexReal, indexImag);
 
-            DataChunk? nChunk = DataStorage.TryLoadChunks(new DataStorage.QueryChunk[1] { qChunk })[0];
+            DataStorageManager.IndexEntry? nEntry = null;
+            DataStorageManager.IndexEntry entry;
+            bool entryLoaded = false;
 
-            if (nChunk == null)
+            dataStorageManager.AddJob(new DataStorageManager.LoadEntriesJob(
+                new DataStorageManager.QueryChunk[1] { qChunk },
+                es =>
+                {
+                    nEntry = es[0];
+                    entryLoaded = true;
+                }
+            ));
+
+            InfoLog("Waiting for requested entry to be searched for...");
+
+            // Wait until entry loaded by data storage manager
+            while (!entryLoaded)
+                Thread.Sleep(10);
+
+            InfoLog("Requested entry search result returned");
+
+            // Check if chunk successfully loaded
+
+            if (nEntry == null)
             {
                 client.Send(RequestNotAvailableCodeBytes);
-                ErrorLog("Requested chunk not available");
+                InfoLog("Requested chunk not available");
                 return;
+            }
+            
+            entry = (DataStorageManager.IndexEntry)nEntry;
+
+            // Load entry's data chunk
+
+            DataChunk chunk;
+
+            if (entry.type == DataStorageManager.IndexEntry.Type.DataFile)
+            {
+
+                // If the chunk is stored in a file
+
+                chunk = new DataChunk(entry.level, entry.indexReal, entry.indexImag);
+                bool chunkFileLoadSuccess = default;
+                bool chunkFileLoaded = false;
+
+                dataStorageManager.AddJob(new DataStorageManager.LoadIndexEntryDataFileChunkJob(
+                    entry,
+                    chunk,
+                    s =>
+                    {
+
+                        chunkFileLoaded = true;
+                        chunkFileLoadSuccess = s;
+
+                    }
+                ));
+
+                InfoLog("Waiting for chunk file to load...");
+
+                // Wait until chunk data loaded
+                while (!chunkFileLoaded)
+                    Thread.Sleep(10);
+
+                InfoLog("Chunk file result returned");
+
+                if (!chunkFileLoadSuccess)
+                {
+
+                    // If chunk data couldn't be loaded
+
+                    client.Send(RequestNotAvailableCodeBytes);
+                    ErrorLog("Failed to load requested chunk's data");
+                    return;
+
+                }
+
             }
             else
             {
-                client.Send(RequestAcceptedCodeBytes);
-                InfoLog("Accepting request");
+
+                // If the chunk isn't stored in a data file
+
+                chunk = entry.BasicToDataChunk();
+
             }
+
+            // Accept request
+
+            client.Send(RequestAcceptedCodeBytes);
+            InfoLog("Accepting request");
 
             // Send requested chunk
 
             MemoryStream chunkStream = new(DataChunk.dataChunkSize + 1); // Should never need more space than this (every value written directly and a byte for the serialization type)
-            nChunk.Serialize(chunkStream);
+            chunk.Serialize(chunkStream);
 
             int serializedLength = Convert.ToInt32(chunkStream.Position);
 

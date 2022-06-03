@@ -1,11 +1,17 @@
 ﻿using System;
-using System.IO;
+using System.Collections.Concurrent;
+using System.Threading;
 using System.Text;
 
 namespace DistributedMandelbrot
 {
-    public static class DataStorage
+    public class DataStorageManager
     {
+
+        /// <summary>
+        /// Whether or not an instance of this exists. There should only ever be one instance of this
+        /// </summary>
+        private static bool singletonExists = false;
 
         // Index file is contiguous list of entries
         // Entry format:
@@ -19,9 +25,11 @@ namespace DistributedMandelbrot
 
         public static string IndexFilePath => Path.Combine(DataDirectoryPath, indexFilename);
 
-        private static readonly object indexFileLock = new();
+        private readonly object indexFileLock;
 
-        private static readonly ConcurrentSet<string> dataFilesBeingAccessed = new();
+        private readonly ConcurrentSet<string> dataFilesBeingAccessed;
+
+        private readonly ConcurrentBag<Job> jobsToProcess;
 
         private static string DataChunkFilenameToPath(string filename)
             => Path.Combine(DataDirectoryPath, filename);
@@ -40,8 +48,8 @@ namespace DistributedMandelbrot
             /// </summary>
             public enum Type
             {
-                /// <summary>The entry relates to a chunk which has an array of its data stored in a file</summary>
-                Regular,
+                /// <summary>The entry relates to a chunk which has its data stored in a file</summary>
+                DataFile,
                 /// <summary>The entry relates to a chunk whose values are all 0</summary>
                 Never,
                 /// <summary>The entry relates to a chunk whose values are all 1</summary>
@@ -63,7 +71,7 @@ namespace DistributedMandelbrot
                 filename = string.Empty;
             }
 
-            public IndexEntry(uint level, uint indexReal, uint indexImag, string filename) : this(level, indexReal, indexImag, Type.Regular)
+            public IndexEntry(uint level, uint indexReal, uint indexImag, string filename) : this(level, indexReal, indexImag, Type.DataFile)
             {
                 this.filename = filename;
             }
@@ -83,22 +91,19 @@ namespace DistributedMandelbrot
 
             }
 
-            public DataChunk ToDataChunk()
+            /// <summary>
+            /// Converts a basic (not stored in a file) index entry to a data chunk
+            /// </summary>
+            public DataChunk BasicToDataChunk()
             {
+
+                if (type == Type.DataFile)
+                    throw new NotSupportedException("Trying to convert data file index entry into a data chunk with incorrect method");
 
                 DataChunk chunk;
 
                 switch (type)
                 {
-
-                    case Type.Regular:
-
-                        chunk = new(level, indexReal, indexImag);
-
-                        if (!TryReadDataFile(filename, ref chunk))
-                            throw new Exception("Unable to read chunk data from file");
-
-                        break;
 
                     case Type.Never:
                         chunk = DataChunk.CreateNeverChunk(level, indexReal, indexImag);
@@ -139,6 +144,224 @@ namespace DistributedMandelbrot
 
         }
 
+        public DataStorageManager()
+        {
+
+            if (singletonExists)
+                throw new Exception("Creating data storage manager instance when one already exists");
+
+            singletonExists = true;
+
+            indexFileLock = new();
+
+            dataFilesBeingAccessed = new();
+            jobsToProcess = new();
+
+            SetUpDataDirectoryIfNeeded();
+
+        }
+
+        #region Job Processing
+
+        public abstract class Job { }
+
+        public class GetCompletedLevelsChunksJob : Job
+        {
+
+            public uint[] levels;
+            public Action<IndexEntry[]> onComplete;
+
+            public GetCompletedLevelsChunksJob(uint[] levels, Action<IndexEntry[]> onComplete)
+            {
+                this.levels = levels;
+                this.onComplete = onComplete;
+            }
+
+        }
+
+        public class LoadEntriesJob : Job
+        {
+
+            public QueryChunk[] queries;
+            public Action<IndexEntry?[]> onComplete;
+
+            public LoadEntriesJob(QueryChunk[] queries, Action<IndexEntry?[]> onComplete)
+            {
+                this.queries = queries;
+                this.onComplete = onComplete;
+            }
+
+        }
+
+        public class SaveChunkJob : Job
+        {
+
+            public DataChunk chunk;
+            public Action onComplete;
+
+            public SaveChunkJob(DataChunk chunk, Action onComplete)
+            {
+                this.chunk = chunk;
+                this.onComplete = onComplete;
+            }
+
+        }
+
+        public class LoadIndexEntryDataFileChunkJob : Job
+        {
+
+            public IndexEntry entry;
+            public DataChunk emptyChunk;
+            public Action<bool> onComplete;
+
+            public LoadIndexEntryDataFileChunkJob(IndexEntry entry, DataChunk emptyChunk, Action<bool> onComplete)
+            {
+                this.entry = entry;
+                this.emptyChunk = emptyChunk;
+                this.onComplete = onComplete;
+            }
+
+        }
+
+        /// <summary>
+        /// Starts processing its jobs so that, whenever jobs arrive, it can be processing one
+        /// </summary>
+        public void StartProcessingJobsSync()
+        {
+
+            while (true)
+            {
+
+                // Wait until job available
+                while (jobsToProcess.IsEmpty)
+                    Thread.Sleep(10);
+
+                // Get a job
+
+                Job job;
+
+                if (!jobsToProcess.TryTake(out Job? nJob))
+                    continue;
+
+                if (nJob == null)
+                    continue;
+                else
+                    job = nJob;
+
+                //Process the job
+
+                if (job is GetCompletedLevelsChunksJob getCompletedJob)
+                {
+
+                    // Trying to find which chunks have already been completed for a specified set of levels
+
+                    IndexEntry[] founds = GetIndexEntriesEnumerator()
+                        .Where(entry => getCompletedJob.levels.Contains(entry.level))
+                        .ToArray();
+
+                    getCompletedJob.onComplete?.Invoke(founds);
+
+                }
+                else if (job is SaveChunkJob saveJob)
+                {
+
+                    // Trying to save a chunk
+
+                    SaveDataChunk(saveJob.chunk);
+
+                    saveJob.onComplete?.Invoke();
+
+                }
+                else if (job is LoadEntriesJob loadJob)
+                {
+
+                    // Trying to load index entries of chunks
+
+                    IndexEntry?[] entries = TryLoadEntries(loadJob.queries);
+
+                    loadJob.onComplete?.Invoke(entries);
+
+                }
+                else if (job is LoadIndexEntryDataFileChunkJob loadChunkJob)
+                {
+
+                    // Loading a chunk from a chunk data file
+
+                    bool success = TryReadDataFile(loadChunkJob.entry.filename, ref loadChunkJob.emptyChunk);
+
+                    loadChunkJob.onComplete?.Invoke(success);
+
+                }
+                else
+                    throw new Exception("Unhandled job type");
+
+            }
+
+        }
+
+        public void AddJob(Job job)
+            => jobsToProcess.Add(job);
+
+        #endregion
+
+        /// <summary>
+        /// Tries to open the index file for reading. If it fails because another process is using the file, keeps trying.
+        /// </summary>
+        private static FileStream TryUntilOpenFileRead(string path)
+        {
+
+            while (true) {
+                try
+                {
+                    // Try returned the opened file
+                    return File.OpenRead(path);
+                }
+                catch (IOException)
+                {
+                    // Keep trying after waiting briefly
+                    Thread.Sleep(10);
+                    continue;
+                }
+                catch
+                {
+                    // Throw any other exceptions
+                    throw;
+                }
+            }
+
+        }
+
+        /// <summary>
+        /// Tries to open the index file for writing. If it fails because another process is using the file, keeps trying.
+        /// </summary>
+        private static FileStream TryUntilOpenFileWrite(string path,
+            bool appendMode = false)
+        {
+
+            FileMode fileMode = appendMode ? FileMode.Append : FileMode.OpenOrCreate;
+
+            while (true)
+            {
+                try
+                {
+                    // Try returned the opened file
+                    return File.Open(path, fileMode, FileAccess.Write);
+                }
+                catch (IOException)
+                {
+                    // Keep trying after waiting briefly
+                    Thread.Sleep(10);
+                    continue;
+                }
+                catch
+                {
+                    // Throw any other exceptions
+                    throw;
+                }
+            }
+
+        }
+
         #region Reading Data
 
         /// <summary>
@@ -147,7 +370,7 @@ namespace DistributedMandelbrot
         /// <param name="path">The file path</param>
         /// <param name="chunk">The chunk that has been read from the file</param>
         /// <returns>If a chunk could be successfully read from the file</returns>
-        private static bool TryReadDataFile(string filename,
+        private bool TryReadDataFile(string filename,
             ref DataChunk chunk)
         {
 
@@ -201,7 +424,7 @@ namespace DistributedMandelbrot
             stream.Read(buffer, 0, 4);
             type = (IndexEntry.Type)BitConverter.ToInt32(buffer, 0);
 
-            if (type == IndexEntry.Type.Regular)
+            if (type == IndexEntry.Type.DataFile)
             {
 
                 stream.Read(buffer, 0, 4);
@@ -241,23 +464,15 @@ namespace DistributedMandelbrot
 
         }
 
-        /// <summary>
-        /// Tries to find the filename for a specified data chunk
-        /// </summary>
-        /// <param name="qLevel">The level of data chunk being looked for</param>
-        /// <param name="qIndexReal">The real index of data chunk being looked for</param>
-        /// <param name="qIndexImag">The imaginary index of data chunk being looked for</param>
-        /// <param name="filename">The filename of the found data chunk file</param>
-        /// <returns>Whether a data chunk file was found for the specified chunk</returns>
-        public static DataChunk?[] TryLoadChunks(QueryChunk[] queries)
+        private IndexEntry?[] TryLoadEntries(QueryChunk[] queries)
         {
 
             // Initialise output chunks array
 
-            DataChunk?[] chunks = new DataChunk[queries.Length];
+            IndexEntry?[] entries = new IndexEntry?[queries.Length];
 
-            for (int i = 0; i < chunks.Length; i++)
-                chunks[i] = null;
+            for (int i = 0; i < entries.Length; i++)
+                entries[i] = null;
 
             // Look through index
 
@@ -272,10 +487,10 @@ namespace DistributedMandelbrot
                     if (query.MatchesIndexEntry(entry))
                     {
 
-                        chunks[qIndex] = entry.ToDataChunk();
+                        entries[qIndex] = entry;
 
-                        if (chunks.All(c => c != null))
-                            return chunks; // If all found, return without needing to look at other index entries
+                        if (entries.All(c => c != null))
+                            return entries; // If all found, return without needing to look at other index entries
 
                     }
 
@@ -283,19 +498,17 @@ namespace DistributedMandelbrot
 
             }
 
-            return chunks;
+            return entries;
 
         }
 
-        public static IEnumerable<IndexEntry> GetIndexEntriesEnumerator()
+        private IEnumerable<IndexEntry> GetIndexEntriesEnumerator()
         {
 
             lock (indexFileLock)
             {
 
-                SetUpDataDirectoryIfNeeded();
-
-                using FileStream file = File.OpenRead(IndexFilePath);
+                using FileStream file = TryUntilOpenFileRead(IndexFilePath);
 
                 while (file.Position < file.Length)
                 {
@@ -328,7 +541,7 @@ namespace DistributedMandelbrot
         /// </summary>
         /// <param name="path">The file path to write the chunk to</param>
         /// <param name="data">The data chunk whose data should be written to the file</param>
-        private static void WriteDataToFile(string filename,
+        private void WriteDataToFile(string filename,
             DataChunk chunk)
         {
 
@@ -338,7 +551,7 @@ namespace DistributedMandelbrot
 
             dataFilesBeingAccessed.Add(filename);
 
-            using (FileStream file = File.OpenWrite(DataChunkFilenameToPath(filename)))
+            using (FileStream file = TryUntilOpenFileWrite(DataChunkFilenameToPath(filename)))
             {
                 chunk.Serialize(file);
             }
@@ -371,7 +584,7 @@ namespace DistributedMandelbrot
             buffer = BitConverter.GetBytes((int)entry.type);
             stream.Write(buffer, 0, 4);
 
-            if (entry.type == IndexEntry.Type.Regular)
+            if (entry.type == IndexEntry.Type.DataFile)
             {
 
                 buffer = BitConverter.GetBytes(entry.filename.Length);
@@ -405,7 +618,7 @@ namespace DistributedMandelbrot
         /// <summary>
         /// Saves a data chunk and adds it to the index
         /// </summary>
-        public static void SaveDataChunk(DataChunk chunk)
+        public void SaveDataChunk(DataChunk chunk)
         {
 
             IndexEntry newEntry = IndexEntry.CreateIndexEntryForDataChunk(chunk);
@@ -413,11 +626,11 @@ namespace DistributedMandelbrot
             lock (indexFileLock)
             {
 
-                using FileStream file = File.Open(IndexFilePath, FileMode.Append, FileAccess.Write);
+                using FileStream file = TryUntilOpenFileWrite(IndexFilePath, appendMode: true);
 
                 WriteIndexEntry(file, newEntry);
 
-                if (newEntry.type == IndexEntry.Type.Regular)
+                if (newEntry.type == IndexEntry.Type.DataFile)
                     WriteDataToFile(newEntry.filename, chunk);
 
             }
