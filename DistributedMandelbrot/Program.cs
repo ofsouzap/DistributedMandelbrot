@@ -119,6 +119,9 @@ namespace DistributedMandelbrot
                 if (!Settings.DistributerLevelsSet)
                     throw new ArgumentException("Distributer levels weren't set when trying to run program");
 
+                // Set up data directory
+                DataStorage.SetUpDataDirectory();
+
                 // Distributer
 
                 Task distributerTask = CreateDistributerTask(

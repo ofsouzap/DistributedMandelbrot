@@ -134,10 +134,14 @@ namespace DistributedMandelbrot
             if (!CheckDataDirectoryExists())
                 Directory.CreateDirectory(DataDirectoryPath);
 
-            if (!CheckIndexFileExists())
-                File.Create(IndexFilePath);
+            lock (indexFileLock)
+                if (!CheckIndexFileExists())
+                    File.Create(IndexFilePath).Close();
 
         }
+
+        public static void SetUpDataDirectory()
+            => SetUpDataDirectoryIfNeeded();
 
         #region Reading Data
 
@@ -292,8 +296,6 @@ namespace DistributedMandelbrot
 
             lock (indexFileLock)
             {
-
-                SetUpDataDirectoryIfNeeded();
 
                 using FileStream file = File.OpenRead(IndexFilePath);
 
